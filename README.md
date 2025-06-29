@@ -1,1 +1,1 @@
-# COC-Customer-Portal
+ClassicCustomerPortal
