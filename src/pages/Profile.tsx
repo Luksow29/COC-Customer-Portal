@@ -6,15 +6,18 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 
 export default function Profile() {
-  const { user } = useAuth();
+  const { user, updateProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: user?.name || '',
     email: user?.email || '',
-    company: user?.company || '',
+    company_name: user?.company_name || '',
     phone: user?.phone || '',
-    address: '123 Business St, Suite 100\nBusiness City, BC 12345',
+    address: user?.address || '',
+    billing_address: user?.billing_address || '',
+    shipping_address: user?.shipping_address || '',
+    secondary_phone: user?.secondary_phone || '',
     notifications: {
       email: true,
       sms: false,
@@ -47,23 +50,40 @@ export default function Profile() {
     e.preventDefault();
     setIsLoading(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setIsLoading(false);
-    setIsEditing(false);
-    
-    // Show success message (you could use a toast library here)
-    alert('Profile updated successfully!');
+    try {
+      const updateData = {
+        name: formData.name,
+        company_name: formData.company_name || null,
+        phone: formData.phone,
+        address: formData.address || null,
+        billing_address: formData.billing_address || null,
+        shipping_address: formData.shipping_address || null,
+        secondary_phone: formData.secondary_phone || null,
+      };
+
+      await updateProfile(updateData);
+      setIsEditing(false);
+      
+      // Show success message (you could use a toast library here)
+      alert('Profile updated successfully!');
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      alert('Failed to update profile. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleCancel = () => {
     setFormData({
       name: user?.name || '',
       email: user?.email || '',
-      company: user?.company || '',
+      company_name: user?.company_name || '',
       phone: user?.phone || '',
-      address: '123 Business St, Suite 100\nBusiness City, BC 12345',
+      address: user?.address || '',
+      billing_address: user?.billing_address || '',
+      shipping_address: user?.shipping_address || '',
+      secondary_phone: user?.secondary_phone || '',
       notifications: {
         email: true,
         sms: false,
@@ -72,6 +92,13 @@ export default function Profile() {
       }
     });
     setIsEditing(false);
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(amount);
   };
 
   return (
@@ -126,8 +153,8 @@ export default function Profile() {
               </div>
               <h3 className="mt-4 text-lg font-semibold text-gray-900">{user?.name}</h3>
               <p className="text-sm text-gray-500">{user?.email}</p>
-              {user?.company && (
-                <p className="text-sm text-gray-500">{user?.company}</p>
+              {user?.company_name && (
+                <p className="text-sm text-gray-500">{user?.company_name}</p>
               )}
             </div>
           </Card>
@@ -138,15 +165,17 @@ export default function Profile() {
             <div className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-gray-600">Total Orders:</span>
-                <span className="font-medium">24</span>
+                <span className="font-medium">{user?.total_orders || 0}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Total Spent:</span>
-                <span className="font-medium">$2,847</span>
+                <span className="font-medium">{formatCurrency(user?.total_spent || 0)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Member Since:</span>
-                <span className="font-medium">Jan 2024</span>
+                <span className="font-medium">
+                  {user?.joined_date ? new Date(user.joined_date).toLocaleDateString() : 'N/A'}
+                </span>
               </div>
             </div>
           </Card>
@@ -186,19 +215,20 @@ export default function Profile() {
                     type="email"
                     value={formData.email}
                     onChange={handleChange}
-                    disabled={!isEditing}
+                    disabled={true} // Email is managed by Supabase auth
                     icon={<Mail className="h-5 w-5" />}
                   />
+                  <p className="text-xs text-gray-500 mt-1">Email cannot be changed here</p>
                 </div>
                 <div>
-                  <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-2">
+                  <label htmlFor="company_name" className="block text-sm font-medium text-gray-700 mb-2">
                     Company
                   </label>
                   <Input
-                    id="company"
-                    name="company"
+                    id="company_name"
+                    name="company_name"
                     type="text"
-                    value={formData.company}
+                    value={formData.company_name}
                     onChange={handleChange}
                     disabled={!isEditing}
                     icon={<Building className="h-5 w-5" />}
@@ -218,27 +248,92 @@ export default function Profile() {
                     icon={<Phone className="h-5 w-5" />}
                   />
                 </div>
-              </div>
-              <div className="mt-6">
-                <label htmlFor="address" className="block text-sm font-medium text-gray-700 mb-2">
-                  Address
-                </label>
-                <div className="relative">
-                  <div className="absolute top-3 left-3 text-gray-400">
-                    <MapPin className="h-5 w-5" />
-                  </div>
-                  <textarea
-                    id="address"
-                    name="address"
-                    rows={3}
-                    value={formData.address}
+                <div>
+                  <label htmlFor="secondary_phone" className="block text-sm font-medium text-gray-700 mb-2">
+                    Secondary Phone
+                  </label>
+                  <Input
+                    id="secondary_phone"
+                    name="secondary_phone"
+                    type="tel"
+                    value={formData.secondary_phone}
                     onChange={handleChange}
                     disabled={!isEditing}
-                    className={`
-                      block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg shadow-sm
-                      ${!isEditing ? 'bg-gray-50 text-gray-500' : 'focus:border-blue-500 focus:ring-blue-500'}
-                    `}
+                    icon={<Phone className="h-5 w-5" />}
                   />
+                </div>
+              </div>
+              
+              <div className="mt-6 space-y-6">
+                <div>
+                  <label htmlFor="address" className="block text-sm font-medium text-gray-700 mb-2">
+                    Address
+                  </label>
+                  <div className="relative">
+                    <div className="absolute top-3 left-3 text-gray-400">
+                      <MapPin className="h-5 w-5" />
+                    </div>
+                    <textarea
+                      id="address"
+                      name="address"
+                      rows={3}
+                      value={formData.address}
+                      onChange={handleChange}
+                      disabled={!isEditing}
+                      className={`
+                        block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg shadow-sm
+                        ${!isEditing ? 'bg-gray-50 text-gray-500' : 'focus:border-blue-500 focus:ring-blue-500'}
+                      `}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="billing_address" className="block text-sm font-medium text-gray-700 mb-2">
+                    Billing Address
+                  </label>
+                  <div className="relative">
+                    <div className="absolute top-3 left-3 text-gray-400">
+                      <MapPin className="h-5 w-5" />
+                    </div>
+                    <textarea
+                      id="billing_address"
+                      name="billing_address"
+                      rows={3}
+                      value={formData.billing_address}
+                      onChange={handleChange}
+                      disabled={!isEditing}
+                      placeholder="Same as address if left blank"
+                      className={`
+                        block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg shadow-sm
+                        ${!isEditing ? 'bg-gray-50 text-gray-500' : 'focus:border-blue-500 focus:ring-blue-500'}
+                      `}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="shipping_address" className="block text-sm font-medium text-gray-700 mb-2">
+                    Shipping Address
+                  </label>
+                  <div className="relative">
+                    <div className="absolute top-3 left-3 text-gray-400">
+                      <MapPin className="h-5 w-5" />
+                    </div>
+                    <textarea
+                      id="shipping_address"
+                      name="shipping_address"
+                      rows={3}
+                      value={formData.shipping_address}
+                      onChange={handleChange}
+                      disabled={!isEditing}
+                      placeholder="Same as address if left blank"
+                      className={`
+                        block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg shadow-sm
+                        ${!isEditing ? 'bg-gray-50 text-gray-500' : 'focus:border-blue-500 focus:ring-blue-500'}
+                      `}
+                    />
+                  </div>
                 </div>
               </div>
             </form>
@@ -317,7 +412,7 @@ export default function Profile() {
               <div className="flex items-center justify-between">
                 <div>
                   <h4 className="font-medium text-gray-900">Password</h4>
-                  <p className="text-sm text-gray-500">Last updated 3 months ago</p>
+                  <p className="text-sm text-gray-500">Manage your account password</p>
                 </div>
                 <Button variant="outline" size="sm">
                   Change Password

@@ -1,46 +1,99 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Download, MessageCircle, Calendar, Package, FileText, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Download, MessageCircle, Calendar, Package, CheckCircle } from 'lucide-react';
+import { supabase, Order, OrderStatus, getOrderStatusHistory } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 
-// Mock data - replace with real data from your API
-const orderDetails = {
-  'ORD-001': {
-    id: 'ORD-001',
-    type: 'Business Cards',
-    quantity: 500,
-    status: 'completed',
-    orderDate: '2024-01-15',
-    deliveryDate: '2024-01-18',
-    completedDate: '2024-01-18',
-    total: '$125.00',
-    description: 'Premium matte finish business cards with logo',
-    specifications: {
-      size: '3.5" x 2"',
-      material: 'Premium cardstock',
-      finish: 'Matte',
-      colors: 'Full color (CMYK)',
-      sides: 'Double-sided'
-    },
-    files: [
-      { name: 'business-card-front.pdf', size: '2.1 MB', type: 'Design File' },
-      { name: 'business-card-back.pdf', size: '1.8 MB', type: 'Design File' }
-    ],
-    timeline: [
-      { status: 'Order Placed', date: '2024-01-15 10:30 AM', completed: true },
-      { status: 'Design Approved', date: '2024-01-15 2:15 PM', completed: true },
-      { status: 'Printing Started', date: '2024-01-16 9:00 AM', completed: true },
-      { status: 'Quality Check', date: '2024-01-17 3:30 PM', completed: true },
-      { status: 'Completed', date: '2024-01-18 11:45 AM', completed: true }
-    ]
-  }
-};
+interface OrderWithStatus extends Order {
+  status: string;
+  statusHistory: OrderStatus[];
+}
 
 export default function OrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
-  const order = orderId ? orderDetails[orderId as keyof typeof orderDetails] : null;
+  const { user } = useAuth();
+  const [order, setOrder] = useState<OrderWithStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (user && orderId) {
+      fetchOrder();
+    }
+  }, [user, orderId]);
+
+  const fetchOrder = async () => {
+    if (!user || !orderId) return;
+
+    try {
+      setLoading(true);
+      const orderIdNum = parseInt(orderId);
+
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderIdNum)
+        .eq('customer_id', user.id)
+        .eq('is_deleted', false)
+        .single();
+
+      if (error) throw error;
+
+      // Get status history
+      const statusHistory = await getOrderStatusHistory(orderIdNum);
+      const currentStatus = statusHistory.length > 0 
+        ? statusHistory[statusHistory.length - 1].status 
+        : 'Pending';
+
+      setOrder({
+        ...data,
+        status: currentStatus,
+        statusHistory
+      });
+    } catch (error) {
+      console.error('Error fetching order:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusBadgeVariant = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'delivered':
+        return 'success';
+      case 'printing':
+      case 'design':
+        return 'info';
+      case 'pending':
+        return 'warning';
+      default:
+        return 'default';
+    }
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(amount);
+  };
+
+  const isStatusCompleted = (status: string, currentStatus: string) => {
+    const statusOrder = ['Pending', 'Design', 'Printing', 'Delivered'];
+    const currentIndex = statusOrder.indexOf(currentStatus);
+    const statusIndex = statusOrder.indexOf(status);
+    return statusIndex <= currentIndex;
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   if (!order) {
     return (
@@ -57,14 +110,6 @@ export default function OrderDetail() {
     );
   }
 
-  const statusColors = {
-    pending: 'warning',
-    design_review: 'info',
-    printing: 'info',
-    completed: 'success',
-    cancelled: 'error'
-  } as const;
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -77,11 +122,11 @@ export default function OrderDetail() {
             </Button>
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{order.id}</h1>
+            <h1 className="text-2xl font-bold text-gray-900">ORD-{order.id}</h1>
             <p className="text-sm text-gray-500">Order Details</p>
           </div>
-          <Badge variant={statusColors[order.status]}>
-            {order.status.replace('_', ' ')}
+          <Badge variant={getStatusBadgeVariant(order.status)}>
+            {order.status}
           </Badge>
         </div>
         <div className="flex items-center space-x-3">
@@ -91,7 +136,7 @@ export default function OrderDetail() {
           </Button>
           <Button variant="outline">
             <Download className="h-4 w-4 mr-2" />
-            Download Files
+            Download Invoice
           </Button>
         </div>
       </div>
@@ -111,16 +156,26 @@ export default function OrderDetail() {
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-600">Product:</span>
-                    <span className="font-medium">{order.type}</span>
+                    <span className="font-medium">{order.order_type}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Quantity:</span>
                     <span className="font-medium">{order.quantity} units</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Total:</span>
-                    <span className="font-medium">{order.total}</span>
+                    <span className="text-gray-600">Design Needed:</span>
+                    <span className="font-medium">{order.design_needed ? 'Yes' : 'No'}</span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Total:</span>
+                    <span className="font-medium">{formatCurrency(order.total_amount)}</span>
+                  </div>
+                  {order.rate && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Rate per unit:</span>
+                      <span className="font-medium">{formatCurrency(order.rate)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
               <div>
@@ -128,64 +183,57 @@ export default function OrderDetail() {
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-600">Order Date:</span>
-                    <span className="font-medium">{order.orderDate}</span>
+                    <span className="font-medium">{order.date}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Due Date:</span>
-                    <span className="font-medium">{order.deliveryDate}</span>
-                  </div>
-                  {order.completedDate && (
+                  {order.delivery_date && (
                     <div className="flex justify-between">
-                      <span className="text-gray-600">Completed:</span>
-                      <span className="font-medium text-emerald-600">{order.completedDate}</span>
+                      <span className="text-gray-600">Delivery Date:</span>
+                      <span className="font-medium">{order.delivery_date}</span>
                     </div>
                   )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Created:</span>
+                    <span className="font-medium">
+                      {order.created_at ? new Date(order.created_at).toLocaleDateString() : 'N/A'}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <h4 className="font-medium text-gray-900 mb-3">Description</h4>
-              <p className="text-gray-600">{order.description}</p>
-            </div>
+            {order.notes && (
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <h4 className="font-medium text-gray-900 mb-3">Notes</h4>
+                <p className="text-gray-600">{order.notes}</p>
+              </div>
+            )}
           </Card>
 
-          {/* Specifications */}
-          <Card>
-            <h3 className="text-lg font-semibold text-gray-900 mb-6 flex items-center">
-              <FileText className="h-5 w-5 mr-2" />
-              Specifications
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Object.entries(order.specifications).map(([key, value]) => (
-                <div key={key} className="flex justify-between py-2 border-b border-gray-100 last:border-b-0">
-                  <span className="text-gray-600 capitalize">{key.replace(/([A-Z])/g, ' $1')}:</span>
-                  <span className="font-medium">{value}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Files */}
-          <Card>
-            <h3 className="text-lg font-semibold text-gray-900 mb-6">Design Files</h3>
-            <div className="space-y-3">
-              {order.files.map((file, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center">
-                    <FileText className="h-5 w-5 text-gray-400 mr-3" />
-                    <div>
-                      <p className="font-medium text-gray-900">{file.name}</p>
-                      <p className="text-sm text-gray-500">{file.type} • {file.size}</p>
-                    </div>
+          {/* Payment Information */}
+          {(order.amount_received || order.payment_method) && (
+            <Card>
+              <h3 className="text-lg font-semibold text-gray-900 mb-6">Payment Information</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {order.amount_received && (
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-600">Amount Received:</span>
+                    <span className="font-medium">{formatCurrency(order.amount_received)}</span>
                   </div>
-                  <Button variant="outline" size="sm">
-                    <Download className="h-4 w-4 mr-2" />
-                    Download
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </Card>
+                )}
+                {order.payment_method && (
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-600">Payment Method:</span>
+                    <span className="font-medium">{order.payment_method}</span>
+                  </div>
+                )}
+                {order.balance_amount && (
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-600">Balance Amount:</span>
+                    <span className="font-medium">{formatCurrency(order.balance_amount)}</span>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -197,23 +245,34 @@ export default function OrderDetail() {
               Order Progress
             </h3>
             <div className="space-y-4">
-              {order.timeline.map((item, index) => (
-                <div key={index} className="flex items-start">
-                  <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${
-                    item.completed ? 'bg-emerald-500' : 'bg-gray-300'
-                  }`}>
-                    {item.completed && <CheckCircle className="h-4 w-4 text-white" />}
-                  </div>
-                  <div className="ml-4 flex-1">
-                    <p className={`text-sm font-medium ${
-                      item.completed ? 'text-gray-900' : 'text-gray-500'
+              {order.statusHistory.length > 0 ? (
+                order.statusHistory.map((statusItem, index) => (
+                  <div key={statusItem.id} className="flex items-start">
+                    <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${
+                      'bg-emerald-500'
                     }`}>
-                      {item.status}
-                    </p>
-                    <p className="text-xs text-gray-500">{item.date}</p>
+                      <CheckCircle className="h-4 w-4 text-white" />
+                    </div>
+                    <div className="ml-4 flex-1">
+                      <p className="text-sm font-medium text-gray-900">
+                        {statusItem.status}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(statusItem.updated_at).toLocaleString()}
+                      </p>
+                      {statusItem.updated_by && (
+                        <p className="text-xs text-gray-500">
+                          Updated by: {statusItem.updated_by}
+                        </p>
+                      )}
+                    </div>
                   </div>
+                ))
+              ) : (
+                <div className="text-center py-4 text-gray-500">
+                  <p className="text-sm">No status updates available</p>
                 </div>
-              ))}
+              )}
             </div>
           </Card>
 

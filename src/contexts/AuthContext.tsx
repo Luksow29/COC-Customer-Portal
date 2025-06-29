@@ -1,21 +1,19 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase, Customer } from '../lib/supabase';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
 
-interface User {
-  id: string;
-  email: string;
-  name: string;
-  company?: string;
-  phone?: string;
-  avatar?: string;
+interface User extends Customer {
+  // Customer data from public.customers table
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string, name: string, company?: string) => Promise<void>;
+  signup: (email: string, password: string, name: string, company?: string, phone?: string) => Promise<void>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  updateProfile: (updates: Partial<Customer>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,13 +30,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const fetchUserProfile = async (authUser: SupabaseUser): Promise<User | null> => {
+    try {
+      const { data: customer, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('user_id', authUser.id)
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') {
+          // No customer record found, create one
+          const newCustomer = {
+            user_id: authUser.id,
+            name: authUser.user_metadata?.name || authUser.email?.split('@')[0] || 'Customer',
+            email: authUser.email,
+            phone: authUser.phone || '',
+            company_name: authUser.user_metadata?.company || null,
+            total_orders: 0,
+            total_spent: 0
+          };
+
+          const { data: createdCustomer, error: createError } = await supabase
+            .from('customers')
+            .insert([newCustomer])
+            .select()
+            .single();
+
+          if (createError) {
+            console.error('Error creating customer profile:', createError);
+            return null;
+          }
+
+          return createdCustomer;
+        }
+        console.error('Error fetching customer profile:', error);
+        return null;
+      }
+
+      return customer;
+    } catch (error) {
+      console.error('Error in fetchUserProfile:', error);
+      return null;
+    }
+  };
+
   useEffect(() => {
-    // Simulate checking for existing session
     const checkAuth = async () => {
       try {
-        const savedUser = localStorage.getItem('user');
-        if (savedUser) {
-          setUser(JSON.parse(savedUser));
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session?.user) {
+          const profile = await fetchUserProfile(session.user);
+          setUser(profile);
         }
       } catch (error) {
         console.error('Auth check failed:', error);
@@ -48,49 +92,86 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     checkAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          const profile = await fetchUserProfile(session.user);
+          setUser(profile);
+        } else if (event === 'SIGNED_OUT') {
+          setUser(null);
+        }
+        setLoading(false);
+      }
+    );
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const login = async (email: string, password: string) => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Mock user data
-      const mockUser: User = {
-        id: '1',
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
-        name: 'John Doe',
-        company: 'Acme Corp',
-        phone: '+1 (555) 123-4567'
-      };
-      
-      setUser(mockUser);
-      localStorage.setItem('user', JSON.stringify(mockUser));
+        password,
+      });
+
+      if (error) throw error;
+
+      if (data.user) {
+        const profile = await fetchUserProfile(data.user);
+        setUser(profile);
+      }
     } catch (error) {
-      throw new Error('Login failed. Please try again.');
+      throw new Error(error instanceof Error ? error.message : 'Login failed');
     } finally {
       setLoading(false);
     }
   };
 
-  const signup = async (email: string, password: string, name: string, company?: string) => {
+  const signup = async (email: string, password: string, name: string, company?: string, phone?: string) => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const mockUser: User = {
-        id: '1',
+      const { data, error } = await supabase.auth.signUp({
         email,
-        name,
-        company
-      };
-      
-      setUser(mockUser);
-      localStorage.setItem('user', JSON.stringify(mockUser));
+        password,
+        options: {
+          data: {
+            name,
+            company,
+            phone
+          }
+        }
+      });
+
+      if (error) throw error;
+
+      if (data.user) {
+        // Create customer profile
+        const customerData = {
+          user_id: data.user.id,
+          name,
+          email,
+          phone: phone || '',
+          company_name: company || null,
+          total_orders: 0,
+          total_spent: 0
+        };
+
+        const { data: customer, error: customerError } = await supabase
+          .from('customers')
+          .insert([customerData])
+          .select()
+          .single();
+
+        if (customerError) {
+          console.error('Error creating customer profile:', customerError);
+        } else {
+          setUser(customer);
+        }
+      }
     } catch (error) {
-      throw new Error('Signup failed. Please try again.');
+      throw new Error(error instanceof Error ? error.message : 'Signup failed');
     } finally {
       setLoading(false);
     }
@@ -99,11 +180,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
       setUser(null);
-      localStorage.removeItem('user');
     } catch (error) {
       console.error('Logout failed:', error);
     } finally {
@@ -112,9 +191,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resetPassword = async (email: string) => {
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    // In real implementation, this would send a reset email
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    if (error) throw error;
+  };
+
+  const updateProfile = async (updates: Partial<Customer>) => {
+    if (!user) throw new Error('No user logged in');
+
+    const { data, error } = await supabase
+      .from('customers')
+      .update(updates)
+      .eq('id', user.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    setUser(data);
   };
 
   const value = {
@@ -123,7 +218,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     login,
     signup,
     logout,
-    resetPassword
+    resetPassword,
+    updateProfile
   };
 
   return (

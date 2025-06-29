@@ -1,89 +1,91 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, Filter, Download, Eye, FileText } from 'lucide-react';
+import { supabase, Payment } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 
-// Mock data - replace with real data from your API
-const invoices = [
-  {
-    id: 'INV-001',
-    orderId: 'ORD-001',
-    amount: '$125.00',
-    status: 'paid',
-    issueDate: '2024-01-15',
-    dueDate: '2024-01-30',
-    paidDate: '2024-01-18',
-    description: 'Business Cards - Premium matte finish'
-  },
-  {
-    id: 'INV-002',
-    orderId: 'ORD-002',
-    amount: '$89.50',
-    status: 'pending',
-    issueDate: '2024-01-14',
-    dueDate: '2024-01-29',
-    paidDate: null,
-    description: 'Flyers - A4 color marketing campaign'
-  },
-  {
-    id: 'INV-003',
-    orderId: 'ORD-003',
-    amount: '$245.00',
-    status: 'overdue',
-    issueDate: '2024-01-10',
-    dueDate: '2024-01-25',
-    paidDate: null,
-    description: 'Banners - Large outdoor weather-resistant'
-  },
-  {
-    id: 'INV-004',
-    orderId: 'ORD-004',
-    amount: '$67.25',
-    status: 'draft',
-    issueDate: '2024-01-12',
-    dueDate: '2024-01-27',
-    paidDate: null,
-    description: 'Brochures - Tri-fold custom design'
-  },
-  {
-    id: 'INV-005',
-    orderId: 'ORD-005',
-    amount: '$156.00',
-    status: 'paid',
-    issueDate: '2024-01-08',
-    dueDate: '2024-01-23',
-    paidDate: '2024-01-12',
-    description: 'Posters - A1 high-quality event promotion'
-  }
-];
-
-const statusColors = {
-  paid: 'success',
-  pending: 'warning',
-  overdue: 'error',
-  draft: 'info'
-} as const;
-
 export default function Invoices() {
+  const { user } = useAuth();
+  const [invoices, setInvoices] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
+  useEffect(() => {
+    if (user) {
+      fetchInvoices();
+    }
+  }, [user]);
+
+  const fetchInvoices = async () => {
+    if (!user) return;
+
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('customer_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      setInvoices(data || []);
+    } catch (error) {
+      console.error('Error fetching invoices:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const filteredInvoices = invoices.filter(invoice => {
-    const matchesSearch = invoice.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         invoice.orderId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         invoice.description.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || invoice.status === statusFilter;
+    const invoiceId = `INV-${invoice.id.slice(-6)}`;
+    const orderId = invoice.order_id ? `ORD-${invoice.order_id}` : '';
+    
+    const matchesSearch = 
+      invoiceId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      orderId.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || invoice.status.toLowerCase() === statusFilter.toLowerCase();
     return matchesSearch && matchesStatus;
   });
 
-  const totals = {
-    total: invoices.reduce((sum, inv) => sum + parseFloat(inv.amount.replace('$', '')), 0),
-    paid: invoices.filter(inv => inv.status === 'paid').reduce((sum, inv) => sum + parseFloat(inv.amount.replace('$', '')), 0),
-    pending: invoices.filter(inv => inv.status === 'pending' || inv.status === 'overdue').reduce((sum, inv) => sum + parseFloat(inv.amount.replace('$', '')), 0)
+  const getStatusBadgeVariant = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'paid':
+        return 'success';
+      case 'partial':
+        return 'info';
+      case 'due':
+        return 'warning';
+      default:
+        return 'default';
+    }
   };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(amount);
+  };
+
+  const totals = {
+    total: invoices.reduce((sum, inv) => sum + inv.total_amount, 0),
+    paid: invoices.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + inv.amount_paid, 0),
+    pending: invoices.filter(inv => inv.status === 'Due' || inv.status === 'Partial').reduce((sum, inv) => sum + (inv.total_amount - inv.amount_paid), 0)
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -112,7 +114,7 @@ export default function Invoices() {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Total Invoiced</p>
-              <p className="text-2xl font-semibold text-gray-900">${totals.total.toFixed(2)}</p>
+              <p className="text-2xl font-semibold text-gray-900">{formatCurrency(totals.total)}</p>
             </div>
           </div>
         </Card>
@@ -123,7 +125,7 @@ export default function Invoices() {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Paid</p>
-              <p className="text-2xl font-semibold text-emerald-600">${totals.paid.toFixed(2)}</p>
+              <p className="text-2xl font-semibold text-emerald-600">{formatCurrency(totals.paid)}</p>
             </div>
           </div>
         </Card>
@@ -134,7 +136,7 @@ export default function Invoices() {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Outstanding</p>
-              <p className="text-2xl font-semibold text-amber-600">${totals.pending.toFixed(2)}</p>
+              <p className="text-2xl font-semibold text-amber-600">{formatCurrency(totals.pending)}</p>
             </div>
           </div>
         </Card>
@@ -160,9 +162,8 @@ export default function Invoices() {
             >
               <option value="all">All Status</option>
               <option value="paid">Paid</option>
-              <option value="pending">Pending</option>
-              <option value="overdue">Overdue</option>
-              <option value="draft">Draft</option>
+              <option value="partial">Partial</option>
+              <option value="due">Due</option>
             </select>
             <Button variant="outline" size="sm">
               <Filter className="h-4 w-4 mr-2" />
@@ -179,44 +180,49 @@ export default function Invoices() {
             <div className="flex items-center justify-between">
               <div className="flex-1">
                 <div className="flex items-center space-x-4 mb-3">
-                  <h3 className="text-lg font-semibold text-gray-900">{invoice.id}</h3>
-                  <Badge variant={statusColors[invoice.status]}>
+                  <h3 className="text-lg font-semibold text-gray-900">INV-{invoice.id.slice(-6)}</h3>
+                  <Badge variant={getStatusBadgeVariant(invoice.status)}>
                     {invoice.status}
                   </Badge>
-                  <Link 
-                    to={`/orders/${invoice.orderId}`}
-                    className="text-sm text-blue-600 hover:text-blue-500"
-                  >
-                    {invoice.orderId}
-                  </Link>
+                  {invoice.order_id && (
+                    <Link 
+                      to={`/orders/${invoice.order_id}`}
+                      className="text-sm text-blue-600 hover:text-blue-500"
+                    >
+                      ORD-{invoice.order_id}
+                    </Link>
+                  )}
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                   <div>
                     <p className="text-sm text-gray-600">Amount</p>
-                    <p className="font-semibold text-gray-900 text-lg">{invoice.amount}</p>
+                    <p className="font-semibold text-gray-900 text-lg">{formatCurrency(invoice.total_amount)}</p>
+                    <p className="text-sm text-gray-500">Paid: {formatCurrency(invoice.amount_paid)}</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Issue Date</p>
-                    <p className="font-medium text-gray-900">{invoice.issueDate}</p>
+                    <p className="font-medium text-gray-900">
+                      {invoice.created_at ? new Date(invoice.created_at).toLocaleDateString() : 'N/A'}
+                    </p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Due Date</p>
-                    <p className={`font-medium ${
-                      invoice.status === 'overdue' ? 'text-red-600' : 'text-gray-900'
-                    }`}>
-                      {invoice.dueDate}
+                    <p className="font-medium text-gray-900">
+                      {invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : 'N/A'}
                     </p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Paid Date</p>
                     <p className="font-medium text-gray-900">
-                      {invoice.paidDate || '-'}
+                      {invoice.payment_date ? new Date(invoice.payment_date).toLocaleDateString() : '-'}
                     </p>
                   </div>
                 </div>
                 
-                <p className="text-sm text-gray-600">{invoice.description}</p>
+                {invoice.notes && (
+                  <p className="text-sm text-gray-600">{invoice.notes}</p>
+                )}
               </div>
               
               <div className="flex items-center space-x-2 ml-4">
@@ -230,7 +236,7 @@ export default function Invoices() {
                   <Download className="h-4 w-4 mr-2" />
                   Download
                 </Button>
-                {invoice.status === 'pending' && (
+                {invoice.status !== 'Paid' && (
                   <Button size="sm">
                     Pay Now
                   </Button>

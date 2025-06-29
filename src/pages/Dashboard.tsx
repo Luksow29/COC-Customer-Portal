@@ -1,61 +1,174 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Package, FileText, Clock, DollarSign, TrendingUp, Plus } from 'lucide-react';
+import { supabase, Order, Payment, getOrderStatus } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 
-// Mock data - replace with real data from your API
-const stats = [
-  { name: 'Total Orders', value: '24', change: '+12%', icon: Package, color: 'text-blue-600' },
-  { name: 'Pending Orders', value: '3', change: '-2%', icon: Clock, color: 'text-amber-600' },
-  { name: 'Total Spent', value: '$2,847', change: '+18%', icon: DollarSign, color: 'text-emerald-600' },
-  { name: 'This Month', value: '$542', change: '+24%', icon: TrendingUp, color: 'text-purple-600' },
-];
+interface DashboardStats {
+  totalOrders: number;
+  pendingOrders: number;
+  totalSpent: number;
+  thisMonth: number;
+}
 
-const recentOrders = [
-  {
-    id: 'ORD-001',
-    type: 'Business Cards',
-    quantity: 500,
-    status: 'completed',
-    date: '2024-01-15',
-    total: '$125.00'
-  },
-  {
-    id: 'ORD-002',
-    type: 'Flyers',
-    quantity: 1000,
-    status: 'printing',
-    date: '2024-01-14',
-    total: '$89.50'
-  },
-  {
-    id: 'ORD-003',
-    type: 'Banners',
-    quantity: 2,
-    status: 'pending',
-    date: '2024-01-13',
-    total: '$245.00'
-  }
-];
-
-const recentInvoices = [
-  {
-    id: 'INV-001',
-    amount: '$125.00',
-    status: 'paid',
-    date: '2024-01-15'
-  },
-  {
-    id: 'INV-002',
-    amount: '$89.50',
-    status: 'pending',
-    date: '2024-01-14'
-  }
-];
+interface RecentOrder extends Order {
+  status: string;
+}
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const [stats, setStats] = useState<DashboardStats>({
+    totalOrders: 0,
+    pendingOrders: 0,
+    totalSpent: 0,
+    thisMonth: 0
+  });
+  const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
+  const [recentInvoices, setRecentInvoices] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (user) {
+      fetchDashboardData();
+    }
+  }, [user]);
+
+  const fetchDashboardData = async () => {
+    if (!user) return;
+
+    try {
+      setLoading(true);
+
+      // Fetch orders
+      const { data: orders, error: ordersError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('customer_id', user.id)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false });
+
+      if (ordersError) throw ordersError;
+
+      // Fetch payments
+      const { data: payments, error: paymentsError } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('customer_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (paymentsError) throw paymentsError;
+
+      // Get recent orders with status
+      const recentOrdersWithStatus = await Promise.all(
+        (orders || []).slice(0, 3).map(async (order) => {
+          const status = await getOrderStatus(order.id);
+          return { ...order, status };
+        })
+      );
+
+      // Calculate stats
+      const currentMonth = new Date().getMonth();
+      const currentYear = new Date().getFullYear();
+      
+      const thisMonthOrders = orders?.filter(order => {
+        const orderDate = new Date(order.date);
+        return orderDate.getMonth() === currentMonth && orderDate.getFullYear() === currentYear;
+      }) || [];
+
+      const thisMonthSpent = thisMonthOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0);
+
+      const pendingCount = await Promise.all(
+        (orders || []).map(async (order) => {
+          const status = await getOrderStatus(order.id);
+          return status === 'Pending' || status === 'Design' || status === 'Printing';
+        })
+      );
+
+      const pendingOrdersCount = pendingCount.filter(Boolean).length;
+
+      setStats({
+        totalOrders: user.total_orders || 0,
+        pendingOrders: pendingOrdersCount,
+        totalSpent: user.total_spent || 0,
+        thisMonth: thisMonthSpent
+      });
+
+      setRecentOrders(recentOrdersWithStatus);
+      setRecentInvoices((payments || []).slice(0, 3));
+
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusBadgeVariant = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'delivered':
+      case 'paid':
+        return 'success';
+      case 'printing':
+      case 'design':
+      case 'partial':
+        return 'info';
+      case 'pending':
+      case 'due':
+        return 'warning';
+      default:
+        return 'default';
+    }
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(amount);
+  };
+
+  const statsData = [
+    { 
+      name: 'Total Orders', 
+      value: stats.totalOrders.toString(), 
+      change: '+12%', 
+      icon: Package, 
+      color: 'text-blue-600' 
+    },
+    { 
+      name: 'Pending Orders', 
+      value: stats.pendingOrders.toString(), 
+      change: '-2%', 
+      icon: Clock, 
+      color: 'text-amber-600' 
+    },
+    { 
+      name: 'Total Spent', 
+      value: formatCurrency(stats.totalSpent), 
+      change: '+18%', 
+      icon: DollarSign, 
+      color: 'text-emerald-600' 
+    },
+    { 
+      name: 'This Month', 
+      value: formatCurrency(stats.thisMonth), 
+      change: '+24%', 
+      icon: TrendingUp, 
+      color: 'text-purple-600' 
+    },
+  ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -63,7 +176,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Welcome back! Here's what's happening with your orders.
+            Welcome back, {user?.name}! Here's what's happening with your orders.
           </p>
         </div>
         <div className="mt-4 sm:mt-0">
@@ -76,7 +189,7 @@ export default function Dashboard() {
 
       {/* Stats */}
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
+        {statsData.map((stat) => (
           <Card key={stat.name} className="hover:shadow-md transition-shadow">
             <div className="flex items-center">
               <div className={`p-2 rounded-lg bg-gray-50 ${stat.color}`}>
@@ -111,28 +224,30 @@ export default function Dashboard() {
             </Link>
           </div>
           <div className="space-y-4">
-            {recentOrders.map((order) => (
-              <div key={order.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-medium text-gray-900">{order.id}</h4>
-                    <Badge 
-                      variant={
-                        order.status === 'completed' ? 'success' :
-                        order.status === 'printing' ? 'info' : 'warning'
-                      }
-                    >
-                      {order.status}
-                    </Badge>
+            {recentOrders.length > 0 ? (
+              recentOrders.map((order) => (
+                <div key={order.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-medium text-gray-900">ORD-{order.id}</h4>
+                      <Badge variant={getStatusBadgeVariant(order.status)}>
+                        {order.status}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-gray-600">{order.order_type} • {order.quantity} units</p>
+                    <p className="text-xs text-gray-500">{order.date}</p>
                   </div>
-                  <p className="text-sm text-gray-600">{order.type} • {order.quantity} units</p>
-                  <p className="text-xs text-gray-500">{order.date}</p>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-gray-900">{formatCurrency(order.total_amount)}</p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-medium text-gray-900">{order.total}</p>
-                </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No orders found</p>
               </div>
-            ))}
+            )}
           </div>
         </Card>
 
@@ -148,24 +263,29 @@ export default function Dashboard() {
             </Link>
           </div>
           <div className="space-y-4">
-            {recentInvoices.map((invoice) => (
-              <div key={invoice.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-medium text-gray-900">{invoice.id}</h4>
-                    <Badge 
-                      variant={invoice.status === 'paid' ? 'success' : 'warning'}
-                    >
-                      {invoice.status}
-                    </Badge>
+            {recentInvoices.length > 0 ? (
+              recentInvoices.map((invoice) => (
+                <div key={invoice.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-medium text-gray-900">INV-{invoice.id.slice(-6)}</h4>
+                      <Badge variant={getStatusBadgeVariant(invoice.status)}>
+                        {invoice.status}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500">{invoice.created_at?.split('T')[0]}</p>
                   </div>
-                  <p className="text-xs text-gray-500">{invoice.date}</p>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-gray-900">{formatCurrency(invoice.total_amount)}</p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-medium text-gray-900">{invoice.amount}</p>
-                </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No invoices found</p>
               </div>
-            ))}
+            )}
           </div>
         </Card>
       </div>
@@ -178,10 +298,12 @@ export default function Dashboard() {
             <Package className="h-6 w-6 mb-2" />
             <span>New Order</span>
           </Button>
-          <Button variant="outline" className="h-24 flex-col">
-            <FileText className="h-6 w-6 mb-2" />
-            <span>View Invoices</span>
-          </Button>
+          <Link to="/invoices" className="block">
+            <Button variant="outline" className="w-full h-24 flex-col">
+              <FileText className="h-6 w-6 mb-2" />
+              <span>View Invoices</span>
+            </Button>
+          </Link>
           <Link to="/orders" className="block">
             <Button variant="outline" className="w-full h-24 flex-col">
               <Clock className="h-6 w-6 mb-2" />
